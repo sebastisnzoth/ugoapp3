@@ -1,0 +1,25 @@
+{
+    "githubPullRequests.queries": [
+        
+        {
+            "label": "Copilot en mi nombre",
+            "query": "repo:${owner}/${repository} is:open author:copilot assignee:${user}"
+        },
+        {
+            "label": "Local Pull Request Branches",
+            "query": "default"
+        },
+        {
+            "label": "Esperando por mi revisión",
+            "query": "repo:${owner}/${repository} is:open review-requested:${user}"
+        },
+        {
+            "label": "Creado por mí",
+            "query": "repo:${owner}/${repository} is:open author:${user}"
+        },
+        {
+            "label": "All Open",
+            "query": "default"
+        }
+    ]
+}
