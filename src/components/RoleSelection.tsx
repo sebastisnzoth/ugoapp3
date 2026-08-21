@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { db } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
-import { User, Briefcase, Shield } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { User, Briefcase } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface RoleSelectionProps {
@@ -10,9 +9,8 @@ interface RoleSelectionProps {
 }
 
 const ROLES = [
-  { id: 'cliente',   label: 'Cliente',        description: 'Busca y contrata servicios', icon: User },
-  { id: 'prestador', label: 'Proveedor',       description: 'Ofrece tus servicios',       icon: Briefcase },
-  { id: 'soberano',  label: 'Administrador',   description: 'Gestión y control total',    icon: Shield },
+  { id: 'cliente', label: 'Cliente', description: 'Busca y contrata servicios', icon: User },
+  { id: 'proveedor', label: 'Proveedor', description: 'Ofrece tus servicios', icon: Briefcase },
 ] as const;
 
 type Role = typeof ROLES[number]['id'];
@@ -20,14 +18,31 @@ type Role = typeof ROLES[number]['id'];
 export default function RoleSelection({ userId, onRoleSelected }: RoleSelectionProps) {
   const [role, setRole] = useState<Role>('cliente');
   const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleSave = async () => {
     setSaving(true);
+    setErrorMessage('');
+
     try {
-      await updateDoc(doc(db, 'profiles', userId), { tipo: role, rol: role });
+      const { error } = await supabase
+        .from('usuarios')
+        .update({ tipo: role })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      if (role === 'proveedor') {
+        const { error: providerError } = await supabase
+          .from('perfiles_proveedor')
+          .upsert({ usuario_id: userId }, { onConflict: 'usuario_id' });
+        if (providerError) throw providerError;
+      }
+
       onRoleSelected();
     } catch (error) {
-      console.error("Error updating role:", error);
+      console.error('Error updating role:', error);
+      setErrorMessage('No se pudo guardar el rol. Intenta nuevamente.');
     } finally {
       setSaving(false);
     }
@@ -39,7 +54,7 @@ export default function RoleSelection({ userId, onRoleSelected }: RoleSelectionP
         <div className="text-center">
           <div className="text-quantum-cyan text-4xl font-bold mb-1">Ω</div>
           <h2 className="text-xl font-bold">Selecciona tu Rol</h2>
-          <p className="text-white/40 text-sm mt-1">Podrás cambiarlo luego desde tu perfil</p>
+          <p className="text-white/40 text-sm mt-1">Los roles administrativos se asignan desde UGO Admin</p>
         </div>
 
         <div className="space-y-3">
@@ -48,15 +63,15 @@ export default function RoleSelection({ userId, onRoleSelected }: RoleSelectionP
               key={id}
               onClick={() => setRole(id)}
               className={cn(
-                "w-full p-4 rounded-2xl border text-left flex items-center gap-4 transition-all duration-200",
+                'w-full p-4 rounded-2xl border text-left flex items-center gap-4 transition-all duration-200',
                 role === id
-                  ? "border-quantum-cyan bg-quantum-cyan/10 shadow-[0_0_15px_rgba(0,242,255,0.15)]"
-                  : "border-white/10 bg-white/5 hover:border-white/20"
+                  ? 'border-quantum-cyan bg-quantum-cyan/10 shadow-[0_0_15px_rgba(0,242,255,0.15)]'
+                  : 'border-white/10 bg-white/5 hover:border-white/20'
               )}
             >
               <div className={cn(
-                "p-2 rounded-xl",
-                role === id ? "bg-quantum-cyan/20 text-quantum-cyan" : "bg-white/10 text-white/40"
+                'p-2 rounded-xl',
+                role === id ? 'bg-quantum-cyan/20 text-quantum-cyan' : 'bg-white/10 text-white/40'
               )}>
                 <Icon size={20} />
               </div>
@@ -64,12 +79,12 @@ export default function RoleSelection({ userId, onRoleSelected }: RoleSelectionP
                 <p className="font-semibold text-sm">{label}</p>
                 <p className="text-xs text-white/40">{description}</p>
               </div>
-              {role === id && (
-                <div className="ml-auto w-2 h-2 rounded-full bg-quantum-cyan" />
-              )}
+              {role === id && <div className="ml-auto w-2 h-2 rounded-full bg-quantum-cyan" />}
             </button>
           ))}
         </div>
+
+        {errorMessage && <p className="text-red-400 text-xs text-center">{errorMessage}</p>}
 
         <button
           onClick={handleSave}
