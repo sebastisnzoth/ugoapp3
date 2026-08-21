@@ -1,6 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://qatfboxsvbyzflxtflmf.supabase.co';
-const supabaseKey = 'sb_publishable_-U1Sd50G9Rckd1zAjanwEQ_Mry04LUq';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+if (!supabaseUrl || !supabasePublishableKey) {
+  throw new Error('Faltan VITE_SUPABASE_URL o VITE_SUPABASE_PUBLISHABLE_KEY');
+}
+
+export const supabase = createClient(supabaseUrl, supabasePublishableKey);

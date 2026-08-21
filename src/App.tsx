@@ -1,30 +1,42 @@
 import { useState, useEffect, useRef } from 'react';
 import { useHugo } from './hooks/useHugo';
 import { useLiveHugo } from './hooks/useLiveHugo';
-import HugoOrb from './components/HugoOrb';
-import QuantumMap from './components/QuantumMap';
-import ProviderDrawer from './components/ProviderDrawer';
 import ServiceHistory from './components/ServiceHistory';
 import UserProfile from './components/UserProfile';
 import WalletView from './components/WalletView';
 import CalendarView from './components/CalendarView';
 import ChatWindow from './components/ChatWindow';
 import DashboardNavigation from './components/DashboardNavigation';
-import NotificationBell from './components/NotificationBell';
 import ProviderDashboard from './components/ProviderDashboard';
 import AdminPanel from './components/AdminPanel';
 import RoleSelection from './components/RoleSelection';
 import ClientAppLayout from './components/ClientAppLayout';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, db, handleFirestoreError, OperationType, signInWithGoogle } from './firebase';
-import { onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
-import { doc, onSnapshot, setDoc, getDoc, serverTimestamp, collection, query, where, orderBy, limit } from 'firebase/firestore';
-import { cn } from './lib/utils';
+import { db, handleFirestoreError, OperationType } from './firebase';
+import { onSnapshot, collection, query, where, orderBy, limit } from 'firebase/firestore';
 import 'leaflet/dist/leaflet.css';
-import { getUserRole } from './lib/auth';
+import { defaultViewForRole, getUserRole, signInWithGoogle } from './lib/auth';
+import { supabase } from './lib/supabase';
+
+type AppUser = {
+  uid: string;
+  id: string;
+  displayName: string | null;
+  email: string | null;
+};
+
+function toAppUser(user: { id: string; email?: string | null; user_metadata?: Record<string, any> }): AppUser {
+  const metadata = user.user_metadata ?? {};
+  return {
+    uid: user.id,
+    id: user.id,
+    displayName: metadata.full_name ?? metadata.name ?? metadata.nombre ?? null,
+    email: user.email ?? null,
+  };
+}
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [providers, setProviders] = useState<any[]>([]);
   const [showRoleSelection, setShowRoleSelection] = useState(false);
@@ -36,7 +48,6 @@ export default function App() {
   const { state, orbState, processMessage, analyzeMedia, sayWelcome, stopTTS, userLocation, requestLocation, isLocationLoading, selectProvider } = useHugo();
   const { isActive: isLiveActive, startLive, stopLive, transcript: liveTranscript } = useLiveHugo();
 
-  // Use a ref to avoid processMessage in the snapshot dependency array (prevents infinite loop)
   const processMessageRef = useRef(processMessage);
   useEffect(() => { processMessageRef.current = processMessage; }, [processMessage]);
 
@@ -48,72 +59,51 @@ export default function App() {
     }
   }, [state.ui_action, state.datos?.proveedores]);
 
-  // Auth Listener
+  // Supabase is the canonical authentication and role source.
   useEffect(() => {
-    let triedAnon = false;
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        setIsAuthReady(true);
+    let mounted = true;
 
-        const userRef = doc(db, 'profiles', currentUser.uid);
-        try {
-          const docSnap = await getDoc(userRef);
-          if (!docSnap.exists()) {
-            setShowRoleSelection(true);
-            setDoc(userRef, {
-              uid: currentUser.uid,
-              nombre: currentUser.displayName || 'Usuário Quantum',
-              updatedAt: serverTimestamp(),
-              createdAt: serverTimestamp()
-            }).catch(err => handleFirestoreError(err, OperationType.WRITE, `profiles/${currentUser.uid}`));
-          } else {
-            const data = docSnap.data();
-            if (!data.tipo) {
-              setShowRoleSelection(true);
-            } else {
-              const role = await getUserRole(currentUser.uid);
-              if (role === 'soberano') setActiveView('admin');
-              else if (role === 'prestador') setActiveView('provider');
-              else setActiveView('map');
-            }
-          }
-        } catch (err) {
-          handleFirestoreError(err, OperationType.GET, `profiles/${currentUser.uid}`);
-        }
-      } else {
-        if (!triedAnon) {
-          triedAnon = true;
-          try {
-            await signInAnonymously(auth);
-          } catch (error) {
-            console.warn("Anonymous sign in failed, using guest session:", error);
-            const guestUserObj = {
-              uid: 'guest_user',
-              displayName: 'Invitado Quantum',
-              email: 'guest@quantum-os.com',
-              emailVerified: true,
-              isAnonymous: true,
-              metadata: {}, providerData: [], providerId: 'firebase', tenantId: null,
-              delete: async () => {}, getIdToken: async () => 'mock-token',
-              getIdTokenResult: async () => ({}) as any, reload: async () => {}, toJSON: () => ({})
-            } as unknown as User;
-            setUser(guestUserObj);
-            setIsAuthReady(true);
-            const userRef = doc(db, 'profiles', 'guest_user');
-            try {
-              const docSnap = await getDoc(userRef);
-              if (!docSnap.exists()) {
-                await setDoc(userRef, { uid: 'guest_user', nombre: 'Invitado Quantum', tipo: 'cliente', updatedAt: serverTimestamp(), createdAt: serverTimestamp() });
-              }
-            } catch (err) {
-              handleFirestoreError(err, OperationType.WRITE, 'profiles/guest_user');
-            }
-          }
-        }
+    const applyUser = async (authUser: any | null) => {
+      if (!mounted) return;
+
+      if (!authUser) {
+        setUser(null);
+        setActiveView('map');
+        setShowRoleSelection(false);
+        setIsAuthReady(true);
+        return;
       }
+
+      const appUser = toAppUser(authUser);
+      setUser(appUser);
+
+      const role = await getUserRole(authUser.id);
+      if (!mounted) return;
+
+      // The DB trigger normally creates usuarios immediately. This fallback only
+      // appears if a legacy/migrated account has no product profile yet.
+      setShowRoleSelection(role === null);
+      setActiveView(defaultViewForRole(role));
+      setIsAuthReady(true);
+    };
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        console.error('Error restoring Supabase session:', error);
+        if (mounted) setIsAuthReady(true);
+        return;
+      }
+      void applyUser(data.session?.user ?? null);
     });
-    return () => unsubscribe();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applyUser(session?.user ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   const handleOrbClick = () => {
@@ -122,7 +112,7 @@ export default function App() {
     else startLive();
   };
 
-  // Firestore: listen for external Hugo communications
+  // Legacy Firestore bridge for Hugo communications. Authentication/roles no longer depend on Firebase.
   useEffect(() => {
     if (!user || !isAuthReady) return;
 
@@ -132,7 +122,6 @@ export default function App() {
     const unsubscribeComms = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const comm = snapshot.docs[0].data();
-        // Avoid reprocessing the same message
         if (comm.mensaje && comm.mensaje !== lastHugoMessageRef.current) {
           lastHugoMessageRef.current = comm.mensaje;
           processMessageRef.current(comm.mensaje, true);
@@ -143,14 +132,59 @@ export default function App() {
     return () => unsubscribeComms();
   }, [user, isAuthReady]);
 
-  // Listen for Providers
+  // Providers are read from the canonical Supabase model.
   useEffect(() => {
     if (!isAuthReady || !user) return;
-    const q = query(collection(db, 'profiles'), where('tipo', '==', 'prestador'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setProviders(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (err) => handleFirestoreError(err, OperationType.GET, 'profiles (providers)'));
-    return () => unsubscribe();
+
+    let cancelled = false;
+
+    const loadProviders = async () => {
+      const { data, error } = await supabase
+        .from('perfiles_proveedor')
+        .select('usuario_id, bio, tarifa_base, online, disponible, ubicacion, estado_verificacion, usuarios!inner(id,nombre,apellido,karma,activo,tipo)')
+        .eq('estado_verificacion', 'verificado')
+        .eq('usuarios.activo', true)
+        .eq('usuarios.tipo', 'proveedor');
+
+      if (error) {
+        console.error('Error loading providers from Supabase:', error);
+        return;
+      }
+
+      if (!cancelled) {
+        setProviders((data ?? []).map((row: any) => {
+          const profile = Array.isArray(row.usuarios) ? row.usuarios[0] : row.usuarios;
+          const location = row.ubicacion as any;
+          const coordinates = location?.coordinates;
+          return {
+            id: row.usuario_id,
+            nombre: [profile?.nombre, profile?.apellido].filter(Boolean).join(' '),
+            karma: profile?.karma,
+            bio: row.bio,
+            tarifa: row.tarifa_base,
+            precio: row.tarifa_base,
+            online: row.online,
+            disponible: row.disponible,
+            lat: Array.isArray(coordinates) ? Number(coordinates[1]) : undefined,
+            lng: Array.isArray(coordinates) ? Number(coordinates[0]) : undefined,
+          };
+        }));
+      }
+    };
+
+    void loadProviders();
+
+    const channel = supabase
+      .channel('ugo-provider-directory')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'perfiles_proveedor' }, () => {
+        void loadProviders();
+      })
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      void supabase.removeChannel(channel);
+    };
   }, [isAuthReady, user]);
 
   const handleHire = (providerName: string) => {
@@ -161,13 +195,12 @@ export default function App() {
     setLoginError('');
     try {
       await signInWithGoogle();
-    } catch (err: any) {
-      console.error("Google sign-in error:", err);
+    } catch (err) {
+      console.error('Supabase Google sign-in error:', err);
       setLoginError('No se pudo iniciar sesión. Intenta de nuevo.');
     }
   };
 
-  // Valid providers with coordinates
   const validProviders = providers.filter(p => {
     const lat = Number(p.latitude ?? p.lat);
     const lng = Number(p.longitude ?? p.lng);
@@ -193,7 +226,7 @@ export default function App() {
         className="bg-quantum-cyan text-black px-8 py-3 rounded-full font-bold text-sm hover:opacity-90 transition-opacity flex items-center gap-2"
       >
         <svg width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        Entrar com Google
+        Entrar con Google
       </button>
       {loginError && <p className="text-red-400 text-sm">{loginError}</p>}
     </div>
@@ -201,12 +234,13 @@ export default function App() {
 
   return (
     <div className="relative h-[100dvh] w-screen bg-quantum-dark overflow-hidden quantum-grid">
-      <DashboardNavigation activeView={activeView} onViewChange={setActiveView} userId={user?.uid || ''} />
+      <DashboardNavigation activeView={activeView} onViewChange={setActiveView} userId={user.uid} />
 
       {showRoleSelection && (
-        <RoleSelection userId={user.uid} onRoleSelected={() => {
+        <RoleSelection userId={user.uid} onRoleSelected={async () => {
           setShowRoleSelection(false);
-          window.location.reload();
+          const role = await getUserRole(user.uid);
+          setActiveView(defaultViewForRole(role));
         }} />
       )}
 
