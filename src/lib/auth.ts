@@ -1,8 +1,6 @@
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from './supabase';
 
 export type UserRole = 'cliente' | 'proveedor' | 'admin' | 'superadmin';
-export type LegacyUserRole = 'cliente' | 'prestador' | 'soberano';
 
 export function normalizeUserRole(role: string | null | undefined): UserRole | null {
   switch (role) {
@@ -21,34 +19,22 @@ export function normalizeUserRole(role: string | null | undefined): UserRole | n
   }
 }
 
-function toLegacyUiRole(role: UserRole | null): LegacyUserRole | null {
-  switch (role) {
-    case 'cliente':
-      return 'cliente';
-    case 'proveedor':
-      return 'prestador';
-    case 'admin':
-    case 'superadmin':
-      return 'soberano';
-    default:
-      return null;
-  }
-}
+export async function getUserRole(uid?: string): Promise<UserRole | null> {
+  const userId = uid ?? (await supabase.auth.getUser()).data.user?.id;
+  if (!userId) return null;
 
-export async function getCanonicalUserRole(uid: string): Promise<UserRole | null> {
-  try {
-    const profileRef = doc(db, 'profiles', uid);
-    const profileSnap = await getDoc(profileRef);
-    if (profileSnap.exists()) return normalizeUserRole(profileSnap.data().tipo);
-  } catch (error) {
-    console.error('Error obteniendo rol del usuario:', error);
-  }
-  return null;
-}
+  const { data, error } = await supabase
+    .from('usuarios')
+    .select('tipo')
+    .eq('id', userId)
+    .maybeSingle();
 
-// Compatibilidad temporal con App.tsx mientras migra de Firebase a Supabase.
-export async function getUserRole(uid: string): Promise<LegacyUserRole | null> {
-  return toLegacyUiRole(await getCanonicalUserRole(uid));
+  if (error) {
+    console.error('Error obteniendo rol desde Supabase:', error);
+    return null;
+  }
+
+  return normalizeUserRole(data?.tipo);
 }
 
 export function checkAdminAccess(role: UserRole | null | undefined): boolean {
@@ -56,19 +42,27 @@ export function checkAdminAccess(role: UserRole | null | undefined): boolean {
   throw new Error('Acceso denegado: se requiere un rol administrativo.');
 }
 
-export function routeUser(role: UserRole) {
-  switch (role) {
-    case 'admin':
-    case 'superadmin':
-      window.location.href = '/admin-touchboard';
-      break;
-    case 'proveedor':
-      window.location.href = '/prestador-dashboard';
-      break;
-    case 'cliente':
-      window.location.href = '/cliente-app';
-      break;
-    default:
-      window.location.href = '/';
-  }
+export function defaultViewForRole(role: UserRole | null): 'map' | 'provider' | 'admin' {
+  if (role === 'admin' || role === 'superadmin') return 'admin';
+  if (role === 'proveedor') return 'provider';
+  return 'map';
+}
+
+export async function signInWithGoogle() {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
+  });
+  if (error) throw error;
+}
+
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
