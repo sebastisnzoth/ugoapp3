@@ -21,18 +21,34 @@ export function normalizeUserRole(role: string | null | undefined): UserRole | n
   }
 }
 
-export async function getUserRole(uid: string): Promise<UserRole | null> {
+function toLegacyUiRole(role: UserRole | null): LegacyUserRole | null {
+  switch (role) {
+    case 'cliente':
+      return 'cliente';
+    case 'proveedor':
+      return 'prestador';
+    case 'admin':
+    case 'superadmin':
+      return 'soberano';
+    default:
+      return null;
+  }
+}
+
+export async function getCanonicalUserRole(uid: string): Promise<UserRole | null> {
   try {
     const profileRef = doc(db, 'profiles', uid);
     const profileSnap = await getDoc(profileRef);
-
-    if (profileSnap.exists()) {
-      return normalizeUserRole(profileSnap.data().tipo);
-    }
+    if (profileSnap.exists()) return normalizeUserRole(profileSnap.data().tipo);
   } catch (error) {
     console.error('Error obteniendo rol del usuario:', error);
   }
   return null;
+}
+
+// Compatibilidad temporal con App.tsx mientras migra de Firebase a Supabase.
+export async function getUserRole(uid: string): Promise<LegacyUserRole | null> {
+  return toLegacyUiRole(await getCanonicalUserRole(uid));
 }
 
 export function checkAdminAccess(role: UserRole | null | undefined): boolean {
