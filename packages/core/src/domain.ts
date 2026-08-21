@@ -1,38 +1,51 @@
-export type UserRole = 'client' | 'provider' | 'admin' | 'superadmin';
+export type UserRole = 'cliente' | 'proveedor' | 'admin' | 'superadmin';
 
-export type ProviderStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
+export type ProviderVerificationStatus =
+  | 'registrado'
+  | 'pendiente'
+  | 'verificado'
+  | 'rechazado'
+  | 'suspendido';
 
-export interface Profile {
+export interface Usuario {
   id: string;
-  role: UserRole;
-  fullName: string | null;
-  phone: string | null;
+  nombre: string;
+  apellido: string | null;
+  tipo: UserRole;
+  activo: boolean;
+  fotoUrl: string | null;
+  pais: string;
+  zona: string | null;
+  karma: number;
+  serviciosCompletados: number;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ProviderProfile {
-  userId: string;
-  status: ProviderStatus;
-  displayName: string | null;
-  description: string | null;
-  isAvailable: boolean;
+export interface PerfilProveedor {
+  usuarioId: string;
+  bio: string | null;
+  tarifaBase: number;
+  online: boolean;
+  disponible: boolean;
+  zonaRadioKm: number;
+  estadoVerificacion: ProviderVerificationStatus;
+  categoriaPrincipalId: string | null;
+  onboardingPaso: number;
+  motivoRechazo: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ServiceCategory {
+export interface Categoria {
   id: string;
-  name: string;
-  slug: string;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
+  nombre: string;
+  activa: boolean;
 }
 
 export const APP_ACCESS: Record<UserRole, readonly ('client' | 'provider' | 'admin')[]> = {
-  client: ['client'],
-  provider: ['provider'],
+  cliente: ['client'],
+  proveedor: ['provider'],
   admin: ['admin'],
   superadmin: ['admin'],
 };
